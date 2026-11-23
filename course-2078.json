@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "courseId": 2078,
+  "repository": "LearningOS/2026a-arceos-nie727904-creator",
+  "commit": "7ae3561d6484154e48a964f370f25f75a1fba408",
+  "score": 100,
+  "totalScore": 600,
+  "exercises": [
+    {
+      "name": "print_with_color",
+      "max": 100,
+      "score": 100,
+      "status": "pass",
+      "exitCode": 0
+    },
+    {
+      "name": "ramfs_rename",
+      "max": 100,
+      "score": 0,
+      "status": "fail",
+      "exitCode": 0
+    },
+    {
+      "name": "alt_alloc",
+      "max": 100,
+      "score": 0,
+      "status": "fail",
+      "exitCode": 0
+    },
+    {
+      "name": "support_hashmap",
+      "max": 100,
+      "score": 0,
+      "status": "fail",
+      "exitCode": 2
+    },
+    {
+      "name": "sys_map",
+      "max": 100,
+      "score": 0,
+      "status": "fail",
+      "exitCode": 0
+    },
+    {
+      "name": "simple_hv",
+      "max": 100,
+      "score": 0,
+      "status": "fail",
+      "exitCode": 0
+    }
+  ],
+  "student": "nie727904-creator",
+  "runId": "45145195119",
+  "runAttempt": "1",
+  "upload": {
+    "status": "pending"
+  }
+}
