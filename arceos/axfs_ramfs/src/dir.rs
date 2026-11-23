@@ -165,6 +165,69 @@ impl VfsNodeOps for DirNode {
         }
     }
 
+    fn rename(&self, src_path: &str, dst_path: &str) -> VfsResult {
+        // This exercise only supports renaming within the same directory.
+        // Normalize leading slashes before comparing paths.
+        let src_path = src_path.trim_start_matches('/');
+        let dst_path = dst_path.trim_start_matches('/');
+
+        let (src_parent, src_name) =
+            src_path.rsplit_once('/').unwrap_or(("", src_path));
+        let (dst_parent, dst_name) =
+            dst_path.rsplit_once('/').unwrap_or(("", dst_path));
+
+        if src_parent != dst_parent {
+            return Err(VfsError::Unsupported);
+        }
+
+        if src_name.is_empty()
+            || dst_name.is_empty()
+            || src_name == "."
+            || src_name == ".."
+            || dst_name == "."
+            || dst_name == ".."
+        {
+            return Err(VfsError::InvalidInput);
+        }
+
+        // Resolve the containing directory before renaming its entry.
+        if !src_parent.is_empty() {
+            let parent_dir = self
+                .this
+                .upgrade()
+                .ok_or(VfsError::NotFound)?
+                .lookup(src_parent)?;
+
+            return parent_dir.rename(src_name, dst_name);
+        }
+
+        let mut children = self.children.write();
+
+        // The source must exist.
+        if !children.contains_key(src_name) {
+            return Err(VfsError::NotFound);
+        }
+
+        if src_name == dst_name {
+            return Ok(());
+        }
+
+        // Do not silently overwrite an existing destination.
+        if children.contains_key(dst_name) {
+            return Err(VfsError::AlreadyExists);
+        }
+
+        // Move the directory entry, retaining the same file node
+        // and therefore the same file contents.
+        let node = children
+            .remove(src_name)
+            .ok_or(VfsError::NotFound)?;
+
+        children.insert(dst_name.into(), node);
+
+        Ok(())
+    }
+
     axfs_vfs::impl_vfs_dir_default! {}
 }
 
