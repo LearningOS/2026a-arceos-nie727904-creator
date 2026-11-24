@@ -50,14 +50,44 @@ fn main() {
     prepare_vm_pgtable(ept_root);
 
     // Kick off vm and wait for it to exit.
-    while !run_guest(&mut ctx) {
-    }
+    while !run_guest(&mut ctx) {}
 
     panic!("Hypervisor ok!");
 }
 
 fn prepare_vm_pgtable(ept_root: PhysAddr) {
-    let hgatp = 8usize << 60 | usize::from(ept_root) >> 12;
+    use alloc::alloc::{alloc_zeroed, Layout};
+    use axhal::mem::{phys_to_virt, virt_to_phys};
+
+    const ROOT_SIZE: usize = 16 * 1024;
+    const ORIGINAL_ROOT_SIZE: usize = 4096;
+
+    // Sv39x4 requires a 16-KiB-aligned, 16-KiB root page table.
+    let layout = Layout::from_size_align(ROOT_SIZE, ROOT_SIZE).unwrap();
+
+    let root_ptr = unsafe { alloc_zeroed(layout) };
+    assert!(!root_ptr.is_null(), "Cannot allocate Sv39x4 root");
+
+    // Preserve the existing Sv39 mappings in the first 512 entries.
+    // The remaining 1536 entries stay zero.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            phys_to_virt(ept_root).as_ptr(),
+            root_ptr,
+            ORIGINAL_ROOT_SIZE,
+        );
+    }
+
+    let new_root = virt_to_phys((root_ptr as usize).into());
+    assert_eq!(
+        usize::from(new_root) & (ROOT_SIZE - 1),
+        0,
+        "Sv39x4 root is not physically aligned"
+    );
+
+
+    let hgatp = (8usize << 60) | (usize::from(new_root) >> 12);
+
     unsafe {
         core::arch::asm!(
             "csrw hgatp, {hgatp}",
@@ -65,14 +95,41 @@ fn prepare_vm_pgtable(ept_root: PhysAddr) {
         );
         core::arch::riscv64::hfence_gvma_all();
     }
+
+    // Keep this root allocated while the guest is running.
 }
 
+
 fn run_guest(ctx: &mut VmCpuRegisters) -> bool {
+    const STIE: usize = 1 << 5;
+    let saved_sie: usize;
+
     unsafe {
+        // Mask the HS supervisor timer interrupt while the guest runs.
+        core::arch::asm!(
+            "csrrc {saved}, sie, {mask}",
+            saved = out(reg) saved_sie,
+            mask = in(reg) STIE,
+        );
+
         _run_guest(ctx);
     }
 
-    vmexit_handler(ctx)
+    // Inspect and handle the original VMExit before re-enabling STIE.
+    // Otherwise a pending timer interrupt may overwrite scause.
+    let exited = vmexit_handler(ctx);
+
+    unsafe {
+        // Restore the original HS timer interrupt enable state.
+        if saved_sie & STIE != 0 {
+            core::arch::asm!(
+                "csrs sie, {mask}",
+                mask = in(reg) STIE,
+            );
+        }
+    }
+
+    exited
 }
 
 #[allow(unreachable_code)]
@@ -102,14 +159,38 @@ fn vmexit_handler(ctx: &mut VmCpuRegisters) -> bool {
             }
         },
         Trap::Exception(Exception::IllegalInstruction) => {
-            panic!("Bad instruction: {:#x} sepc: {:#x}",
-                stval::read(),
+            let instruction = stval::read();
+
+            if ctx.guest_regs.sepc == VM_ENTRY
+                && instruction == 0xf14025f3
+            {
+                // Emulate: csrr a1, mhartid
+                ctx.guest_regs.gprs.set_reg(A1, 0x1234);
+                ctx.guest_regs.sepc += 4;
+                return false;
+            }
+
+            panic!(
+                "Unexpected illegal instruction: {:#x} sepc: {:#x}",
+                instruction,
                 ctx.guest_regs.sepc
             );
         },
         Trap::Exception(Exception::LoadGuestPageFault) => {
-            panic!("LoadGuestPageFault: stval{:#x} sepc: {:#x}",
-                stval::read(),
+            let fault_addr = stval::read();
+
+            if ctx.guest_regs.sepc == VM_ENTRY + 4
+                && fault_addr == 0x40
+            {
+                // Emulate: ld a0, 64(zero)
+                ctx.guest_regs.gprs.set_reg(A0, 0x6688);
+                ctx.guest_regs.sepc += 4;
+                return false;
+            }
+
+            panic!(
+                "Unexpected LoadGuestPageFault: stval={:#x} sepc={:#x}",
+                fault_addr,
                 ctx.guest_regs.sepc
             );
         },

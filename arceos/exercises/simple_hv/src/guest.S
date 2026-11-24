@@ -131,8 +131,8 @@ _guest_exit:
 
 _restore_csrs:
     /* Swap in hypervisor CSRs. */
-    ld    t1, ({hyp_sstatus})(a0)
-    csrrw t1, sstatus, t1
+    /* Save guest status, but keep HS interrupts disabled for now. */
+    csrr  t1, sstatus
     sd    t1, ({guest_sstatus})(a0)
 
     csrr  t1, hstatus
@@ -177,5 +177,9 @@ _restore_csrs:
     ld   s10, ({hyp_s10})(a0)
     ld   s11, ({hyp_s11})(a0)
     ld   sp, ({hyp_sp})(a0)
+
+    /* Restore HS status only after stvec, sscratch and GPRs are restored. */
+    ld   t1, ({hyp_sstatus})(a0)
+    csrw sstatus, t1
 
     ret
