@@ -140,7 +140,76 @@ fn sys_mmap(
     fd: i32,
     _offset: isize,
 ) -> isize {
-    unimplemented!("no sys_mmap!");
+    use axhal::mem::VirtAddr;
+    use memory_addr::VirtAddrRange;
+
+    const PAGE_SIZE: usize = 4096;
+
+    // Support the file-backed, private mapping required by this exercise.
+    let mmap_flags = MmapFlags::from_bits_truncate(flags);
+    if length == 0
+        || !addr.is_null()
+        || _offset != 0
+        || fd < 0
+        || !mmap_flags.contains(MmapFlags::MAP_PRIVATE)
+        || mmap_flags.contains(MmapFlags::MAP_ANONYMOUS)
+    {
+        return -(LinuxError::EINVAL.code() as isize);
+    }
+
+    let map_size = match length.checked_add(PAGE_SIZE - 1) {
+        Some(size) => size & !(PAGE_SIZE - 1),
+        None => return -(LinuxError::ENOMEM.code() as isize),
+    };
+
+    // Read the file into kernel memory before creating the user mapping.
+    // The remaining bytes are zero-filled.
+    let mut data = alloc::vec![0u8; length];
+    let mut read_total = 0;
+
+    while read_total < length {
+        let n = api::sys_read(
+            fd,
+            data[read_total..].as_mut_ptr() as *mut c_void,
+            length - read_total,
+        );
+
+        if n < 0 {
+            return n;
+        }
+        if n == 0 {
+            break;
+        }
+
+        read_total += n as usize;
+    }
+
+    let task = current();
+    let mut aspace = task.task_ext().aspace.lock();
+
+    let base = aspace.base();
+    let limit = VirtAddrRange::from_start_size(base, aspace.size());
+
+    let start = match aspace.find_free_area(base, map_size, limit) {
+        Some(vaddr) => vaddr,
+        None => return -(LinuxError::ENOMEM.code() as isize),
+    };
+
+    let prot_flags = MmapProt::from_bits_truncate(prot);
+    let mapping_flags = MappingFlags::from(prot_flags);
+
+    if aspace.map_alloc(start, map_size, mapping_flags, true).is_err() {
+        return -(LinuxError::ENOMEM.code() as isize);
+    }
+
+    if read_total != 0
+        && aspace.write(start, &data[..read_total]).is_err()
+    {
+        let _ = aspace.unmap(start, map_size);
+        return -(LinuxError::EFAULT.code() as isize);
+    }
+
+    start.as_usize() as isize
 }
 
 fn sys_openat(dfd: c_int, fname: *const c_char, flags: c_int, mode: api::ctypes::mode_t) -> isize {
